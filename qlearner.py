@@ -1,14 +1,16 @@
+# Import libraries
 import numpy as np
 import pandas as pd
+from collections.abc import Iterator
+from abc import abstractmethod
 
 
 class Param:
     """
-    Class that represents free parameters for RL models
+    Class that represents a parameter with a random value
     """
-
-    def __init__(self, name, func=np.random.uniform, func_kwargs=None,
-                 nbins=5,):
+    def __init__(self, name, func, min=None, max=None, drift_rate=None,
+                 nbins=5, **func_kwargs):
         # Parameter name
         self.name = name
 
@@ -18,142 +20,99 @@ class Param:
         # Function keyword arguments
         self.func_kwargs = func_kwargs
 
+        # Initialize random value for parameter
+        self.value = self.func(**func_kwargs)
+
+        # Minimum value for parameter
+        if "low" in self.func_kwargs:
+            self.min = func_kwargs["low"]
+        else:
+            self.min = min
+
+        # Maximum value for parameter
+        if "high" in self.func_kwargs:
+            self.max = func_kwargs["high"]
+        else:
+            self.max = max
+
+        # Drift rate for parameter
+        self.drift_rate = drift_rate
+
         # Bins for parameter
         self.nbins = nbins
 
     def random(self):
-        # Return random value for parameter
-        return self.func(**self.func_kwargs)
+        # Update random value for parameter
+        self.value = self.func(**self.func_kwargs)
+
+        return self.value
 
     def range(self):
-        # Return range for parameter if low and high are defined
-        if "low" not in self.func_kwargs or "high" not in self.func_kwargs:
-            raise ValueError("Low and high must be defined for range")
+        # Return range for parameter
+        if self.min is None or self.max is None:
+            raise ValueError("Min and max should be defined for range")
         else:
-            return self.func_kwargs["low"], self.func_kwargs["high"]
+            return [self.min, self.max]
 
-
-class QLearnerStationary:
-    """
-    Class that represents a stationary Q-learning agent
-    """
-
-    def __init__(self, idx_agent, params, nactions=2, ntrials=1000,
-                 block_size=100,):
-        """Initialize Q-learner"""
-        # Free RL model parameters: alpha and beta
-        if "alpha" not in params or "beta" not in params:
-            raise ValueError("At least one free parameter must be specified")
+    def add_drift(self):
+        if self.func == np.random.normal:
+            self.value += self.func(0, self.drift_rate)
         else:
-            self.params = {k: Param(k, **val) for k, val in params.items()}
+            raise ValueError("Only normal distribution is supported for drift")
 
-        # Agent index
-        self.idx_agent = idx_agent
+    def transform(self):
+        if self.func == np.random.normal:
+            # Transform parameter
+            if self.name == "alpha":
+                return 1 / (1 + np.exp(-self.value))
+            elif self.name == "beta":
+                return np.exp(self.value).clip(min=self.min, max=self.max)
+            else:
+                raise ValueError("Only alpha and beta are supported for "
+                                 "transformation")
+        else:
+            raise ValueError("Only normal distribution is supported for "
+                             "transformation")
 
-        # Number of actions
-        self.nactions = nactions
+
+class ParamGeneratorStat(Iterator):
+    """
+    Class that represents a generator for stationary parameter
+    """
+    def __init__(self, name, func, ntrials=1000, **param_kwargs):
+        # Instantiate a Parameter object
+        self.param = Param(name, func, **param_kwargs)
 
         # Number of trials
         self.ntrials = ntrials
 
-        # Number of trials per block
-        self.block_size = block_size
+        # Starting index
+        self._index = 0
 
-        # Initialize free parameters of the RL model
-        self.alpha = np.full(self.ntrials, self.params["alpha"].random())
-        self.beta = np.full(self.ntrials, self.params["beta"].random())
+    def __next__(self):
+        """Iterate through trials"""
+        if self._index < self.ntrials:
+            # Increment index
+            self._index += 1
 
-        # Calculate expected reward
-        self.exp_reward = self._calc_exp_reward()
-
-        # Initialize Q-values and related action probabilities
-        self.q = np.zeros((self.ntrials, 2), dtype=float)
-        self.action_prob = np.zeros((self.ntrials, 2), dtype=float)
-
-        # Initialize action and reward
-        self.action = np.zeros(self.ntrials, dtype=int)
-        self.reward = np.zeros(self.ntrials, dtype=int)
-
-    def _calc_exp_reward(self, prob=[0.1, 0.5, 0.9]):
-        """Calculate expected reward"""
-        exp_reward = np.concatenate(
-            [np.full(self.block_size, np.random.choice(prob))
-             for _ in range(self.ntrials // self.block_size)]
-        )
-
-        return np.stack((exp_reward, 1 - exp_reward), axis=1)
-
-    def _qlearner(self, q, exp_reward, alpha, beta):
-        """Q-learner"""
-        # Calculate action probabilities
-        action_prob = np.exp(beta * q) / np.sum(np.exp(beta * q))
-
-        # Choose action
-        action = np.random.choice([0, 1], p=action_prob)
-
-        # Calculate reward
-        reward = np.random.choice([0, 1], p=[exp_reward[1 - action],
-                                             exp_reward[action]])
-
-        # Calculate prediction error
-        pred_error = reward - q[action]
-
-        # Update q value for chosen action
-        q[action] = q[action] + alpha * pred_error
-
-        return q, action_prob, action, reward
-
-    def simulate(self):
-        """Simulate agent"""
-        # Loop through trials
-        for t in range(self.ntrials):
-            # Update Q-values
-            if t % self.block_size > 0:
-                self.q[t, :] = self.q[t - 1, :]
-
-            # Run Q-learner
-            self.q[t, :], self.action_prob[t, :], self.action[t], self.reward[t] = \
-                self._qlearner(self.q[t, :], self.exp_reward[t, :], self.alpha[t], self.beta[t])
-
-    def to_df(self, columns=["alpha", "beta", "action", "reward"]):
-        """Create dataframe from qlearner inputs and outputs"""
-        # Initialize dataframe
-        df = pd.DataFrame({"agent": np.full(self.ntrials, self.idx_agent),
-                           "block": np.arange(self.ntrials) // self.block_size,
-                           "trial": np.arange(self.ntrials), }, )
-
-        # Add columns to dataframe
-        for col in columns:
-            if "bin" in col:
-                # Convert parameters values to binned values
-                param_name = col.replace("_bin", "")
-                param = self.params[param_name]
-                df[col] = pd.cut(getattr(self, param_name),
-                                 bins=np.linspace(*param.range(), param.nbins+1),
-                                 labels=np.arange(param.nbins),)
-            elif getattr(self, col).ndim == 1:
-                # 1D variables
-                df[col] = getattr(self, col)
-            else:
-                # >=2D variables
-                for i in range(getattr(self, col).shape[1]):
-                    df[f"{col}_{i}"] = getattr(self, col)[:, i]
-
-        return df
+            # Return stationary parameter value
+            return self.param.value
+        else:
+            raise StopIteration
 
 
-class QLearnerNonStationary(QLearnerStationary):
+class ParamGeneratorNonStat(ParamGeneratorStat):
     """
-    Class that represents a non-stationary Q-learning agent
+    Class that represents a generator for a non-stationary parameter
     """
+    def __init__(self, name, func, min_rep=100, prob_to_switch=0.005,
+                 max_switch=np.random.choice([2, 3, 4]), **kwargs):
+        """Initialize generator"""
+        # Initialize parent class
+        super().__init__(name, func, **kwargs)
 
-    def __init__(self, idx_agent, params, max_cntr=100, max_switch=np.random.choice([2, 3, 4]),
-                 prob_to_switch=0.005, **kwargs):
-        """Initialize Q-learner"""
-        super().__init__(idx_agent, params, **kwargs)
-
-        # Maximum number for counter
-        self.max_cntr = max_cntr
+        # Minimum repetition of parameter
+        self.min_rep = min_rep
 
         # Maximum number of switches
         self.max_switch = max_switch
@@ -161,65 +120,250 @@ class QLearnerNonStationary(QLearnerStationary):
         # Probability to switch
         self.prob_to_switch = prob_to_switch
 
-    def simulate(self):
-        """Simulate agent"""
-        # Loop through trials
-        for t in range(self.ntrials):
-            # Update Q-values
-            if t % self.block_size > 0:
-                self.q[t, :] = self.q[t - 1, :]
+        # Number of repeating same value
+        self.nrep = 0
 
-            # Counters for alpha, beta and their switches
-            c_a, c_as, c_b, c_bs = 0, 0, 0, 0
+        # Number of switches
+        self.nswitch = 0
 
-            # Update alpha
-            if c_a > self.max_cntr and c_as < self.max_switch and np.random.random() < self.prob_to_switch:
-                self.alpha[t] = self.params["alpha"].random()
-                c_as += 1
-                c_a = 0
+    def __next__(self):
+        """Iterate through trials"""
+        if self._index < self.ntrials:
+            # Increment number of repeating same value
+            self.nrep += 1
 
-            # Update alpha
-            if c_b > self.max_cntr and c_bs < self.max_switch and np.random.random() < self.prob_to_switch:
-                self.beta[t] = self.params["beta"].random()
-                c_bs += 1
-                c_b = 0
+            # Update parameter value
+            if (
+                self.nrep > self.min_rep
+                and self.nswitch < self.max_switch
+                and np.random.random() < self.prob_to_switch
+            ):
+                self.param.random()
+                self.nswitch += 1
+                self.nrep = 0
 
-            # Run Q-learner
-            self.q[t, :], self.action_prob[t, :], self.action[t], self.reward[t] = \
-                self._qlearner(self.q[t, :], self.exp_reward[t, :], self.alpha[t], self.beta[t])
+            # Increment index
+            self._index += 1
+
+            # Return non-stationary parameter value
+            return self.param.value
+        else:
+            raise StopIteration
 
 
-class QLearnerRandomWalk(QLearnerStationary):
+class ParamGeneratorRandWalk(ParamGeneratorStat):
     """
-    Class that represents a random-walk Q-learning agent
+    Class that represents a generator for a random-walk parameter
     """
+    def __init__(self, name, func, drift_rate, **kwargs):
+        """Initialize generator"""
+        # Initialize parent class
+        super().__init__(name, func, drift_rate=drift_rate, **kwargs)
 
-    def __init__(self, idx_agent, params, drift_rate, **kwargs):
+    def __next__(self):
+        """Iterate through trials"""
+        if self._index < self.ntrials:
+            if self._index > 0:
+                self.param.add_drift()
+
+            # Increment index
+            self._index += 1
+
+            # Return random-walk parameter value
+            return self.param.transform()
+        else:
+            raise StopIteration
+
+
+class QGenerator(Iterator):
+    """
+    Class that represents an abstract generator for a Q-learning agent
+    """
+    def __init__(self, alpha_gen, beta_gen, nactions, ntrials, block_size):
+        """Initialize generator"""
+        # Parameter generators
+        self.alpha_gen = alpha_gen
+        self.beta_gen = beta_gen
+
+        # Initialize parameters
+        self.alpha = None
+        self.beta = None
+
+        # Number of actions
+        self.nactions = nactions
+
+        # Initialize Q-values
+        self.q = np.zeros(nactions, dtype=float)
+
+        # Initialize action and action probabilities
+        self.action = None
+        self.action_prob = np.zeros(nactions, dtype=float)
+
+        # Initialize reward and reward probabilities
+        self.reward = None
+        self.reward_prob = np.zeros(nactions, dtype=float)
+
+        # Number of trials
+        self.ntrials = ntrials
+
+        # Block size
+        self.block_size = block_size
+
+        # Starting index
+        self._index = 0
+
+    @abstractmethod
+    def _choose_action(self):
+        """Choose action"""
+        pass
+
+    @abstractmethod
+    def _calc_reward(self):
+        """Calculate reward"""
+        pass
+
+    def _update_q(self):
+        """Update Q-value"""
+        if (self._index + 1) % self.block_size == 0:
+            # Reset Q-values at the end of a block
+            self.q = np.zeros(self.nactions, dtype=float)
+        else:
+            # Update Q-value for chosen action (Eq. 2 in Ger et al, 2023)
+            self.q[self.action] = self.q[self.action] \
+                + self.alpha * (self.reward - self.q[self.action])
+
+    def __next__(self):
+        """Iterate through trials"""
+        if self._index < self.ntrials:
+            # Generate parameters
+            self.alpha = self.alpha_gen.__next__()
+            self.beta = self.beta_gen.__next__()
+
+            # Choose action
+            self._choose_action()
+
+            # Calculate reward
+            self._calc_reward()
+
+            # Update Q-value
+            self._update_q()
+
+            # Increment index
+            self._index += 1
+        else:
+            raise StopIteration
+
+
+class QGenerator2Armed(QGenerator):
+    """
+    Class that represents a generator for a Q-learning agent performing a
+    2-armed bandit task with reward probabilities fixed within a block
+    """
+    def __init__(self, alpha_gen, beta_gen, nactions=2, **kwargs):
+        """Initialize generator"""
+        # Initialize parent class
+        super().__init__(alpha_gen, beta_gen, nactions=nactions, **kwargs)
+
+    def _choose_action(self):
+        """Choose action"""
+        # Calculate action probabilities (Eq. 3 in Ger et al, 2023)
+        self.action_prob = np.exp(self.beta * self.q) \
+            / np.sum(np.exp(self.beta * self.q))
+
+        # Choose action
+        self.action = np.random.choice(2, p=self.action_prob)
+
+    def _calc_reward(self, prob=[0.1, 0.5, 0.9]):
+        """Calculate reward"""
+        # Randomly choose reward probability at the beginning of a block
+        if self._index % self.block_size == 0:
+            reward_prob = np.random.choice(prob)
+            self.reward_prob = np.array([reward_prob, 1-reward_prob])
+
+        # Calculate reward
+        self.reward = np.random.choice(2, p=self.reward_prob)
+
+    def __next__(self):
+        # Call parent method
+        super().__next__()
+
+        # Return values
+        # TODO: automate returned variables (e.g., to avoid hard-coding
+        # variables or being able to define subset of variables)
+        return (self.alpha, self.beta, self.q[0], self.q[1], self.action,
+                self.action_prob[0], self.action_prob[1], self.reward,
+                self.reward_prob[0], self.reward_prob[1],)
+
+
+class QLearner:
+    """
+    Class that represents an abstract Q-learning agent
+    """
+    def __init__(self, idx_agent, q_gen, **q_gen_kwargs):
         """Initialize Q-learner"""
-        super().__init__(idx_agent, params, **kwargs)
+        # Agent index
+        self.idx_agent = idx_agent
 
-        # Drift rate
-        self.drift_rate = drift_rate
+        # Generator for Q-learner
+        self.q_gen = q_gen(**q_gen_kwargs)
 
+        # Initialize dataframe
+        self.df = pd.DataFrame(
+            {"agent": np.full(self.q_gen.ntrials, self.idx_agent),
+             "block": np.arange(self.q_gen.ntrials) // self.q_gen.block_size,
+             "trial": np.arange(self.q_gen.ntrials)}
+        )
+
+    @abstractmethod
     def simulate(self):
         """Simulate agent"""
-        # Loop through trials
-        for t in range(self.ntrials):
-            # Update Q-values
-            if t % self.block_size > 0:
-                self.q[t, :] = self.q[t - 1, :]
+        pass
 
-            # Update alpha and beta
-            if t > 0:
-                self.alpha[t] += np.random.normal(0, self.drift_rate['alpha'])
-                self.beta[t] += np.random.normal(0, self.drift_rate['beta'])
+    def format_df(self, columns=["alpha", "beta", "action", "reward"]):
+        """Format dataframe"""
+        # Circular shift Q-values so that updated Q-values belong to next trial
+        for i in range(self.q_gen.nactions):
+            self.df[f'q{i+1}'] = np.roll(self.df[f'q{i+1}'], 1)
 
-            # Transform beta
-            self.beta[t] = np.exp(self.beta[t]).clip(0, 10)
+        # Convert parameter values to binned values
+        if "alpha_bin" in columns:
+            param = self.q_gen.alpha_gen.param
+            self.df["alpha_bin"] = pd.cut(
+                self.df["alpha"], bins=np.linspace(*param.range(), param.nbins+1),
+                labels=np.arange(param.nbins)
+            )
+        if "beta_bin" in columns:
+            param = self.q_gen.beta_gen.param
+            self.df["beta_bin"] = pd.cut(
+                self.df["beta"], bins=np.linspace(*param.range(), param.nbins+1),
+                labels=np.arange(param.nbins)
+            )
 
-            # Transform alpha
-            self.alpha[t] = 1 / (1 + np.exp(-self.alpha[t]))
+        # Return dataframe with selected columns
+        return self.df[columns]
 
-            # Run Q-learner
-            self.q[t, :], self.action_prob[t, :], self.action[t], self.reward[t] = \
-                self._qlearner(self.q[t, :], self.exp_reward[t, :], self.alpha[t], self.beta[t])
+
+class QLearner2Armed(QLearner):
+    """
+    Class that represents a Q-learning agent performing a 2-armed bandit task
+    """
+    def __init__(self, idx_agent, **q_gen_kwargs):
+        """Initialize Q-learner"""
+        # Initialize parent class
+        super().__init__(idx_agent, QGenerator2Armed, **q_gen_kwargs)
+
+    def simulate(self):
+        """Simulate agent performing a 2-armed bandit task"""
+        # Loop through trials and add all results to dataframe
+        self.df = self.df.join(pd.DataFrame([(
+            alpha, beta, q1, q2, action, action_p1, action_p2, reward,
+            reward_p1, reward_p2
+        ) for (
+            alpha, beta, q1, q2, action, action_p1, action_p2, reward,
+            reward_p1, reward_p2
+        ) in self.q_gen], columns=[
+            'alpha', 'beta', 'q1', 'q2', 'action', 'action_prob1',
+            'action_prob2', 'reward', 'reward_prob1', 'reward_prob2']))
+
+        # Return self to encourage cascading
+        return self

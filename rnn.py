@@ -1,3 +1,4 @@
+# Import libraries
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,65 +10,71 @@ import os
 class GRU(nn.Module):
     """
     Class for custom RNN model with two GRU layers
-    """
 
+    NB: we keep the naming convention of layers from the original paper
+    to be able to compare with the original implementation (but new
+    suggestinos are made in the comments for the future)
+    """
     def __init__(self, input_size, hidden_size, alpha_embedding_size,
                  beta_embedding_size, output_size, dropout,):
-        """Initialize the model"""
+        """Initialize model"""
         # Initialize parent class
-        super(GRU, self).__init__()
+        super().__init__()
 
         # Set size attributes
         self.input_size = input_size
         self.alpha_embedding_size = alpha_embedding_size
         self.beta_embedding_size = beta_embedding_size
 
-        # GRU layer on inputs
-        self.gru_input = nn.GRU(input_size=input_size, hidden_size=hidden_size,
-                                num_layers=1, batch_first=True,
-                                dropout=dropout,)
+        # GRU layer on inputs (self.gru_input instead of self.hidden_0?)
+        self.hidden_0 = nn.GRU(input_size=input_size, hidden_size=hidden_size,
+                               num_layers=1, batch_first=True,
+                               dropout=dropout,)
 
-        # Linear layers on GRU output
-        self.linear_alpha_bin = nn.Linear(hidden_size, alpha_embedding_size)
-        self.linear_beta_bin = nn.Linear(hidden_size, beta_embedding_size)
+        # Linear layers on GRU output (self.linear_*_bin instead of
+        # self.out_*?)
+        self.out_alpha = nn.Linear(hidden_size, alpha_embedding_size)
+        self.out_beta = nn.Linear(hidden_size, beta_embedding_size)
 
         # RELU layers on linear output
         self.relu_alpha = nn.ReLU()
         self.relu_beta = nn.ReLU()
 
-        # Linear layers on RELU output
-        self.linear_alpha = nn.Linear(alpha_embedding_size, 1)
-        self.linear_beta = nn.Linear(beta_embedding_size, 1)
+        # Linear layers on RELU output (self.linear_* instead of self.reg_*?)
+        self.reg_alpha = nn.Linear(alpha_embedding_size, 1)
+        self.reg_beta = nn.Linear(beta_embedding_size, 1)
 
-        # GRU layer on embedded inputs
-        self.gru_embedded = nn.GRU(input_size=input_size
-                                   + alpha_embedding_size
-                                   + beta_embedding_size,
-                                   hidden_size=hidden_size, num_layers=1,
-                                   batch_first=True, dropout=dropout,)
+        # GRU layer on embedded inputs (self.gru_embedded instead of
+        # self.hidden_1?)
+        self.hidden_1 = nn.GRU(input_size=input_size
+                               + alpha_embedding_size
+                               + beta_embedding_size,
+                               hidden_size=hidden_size, num_layers=1,
+                               batch_first=True, dropout=dropout,)
 
-        # Linear layer on embedded GRU output
-        self.linear_action = nn.Linear(hidden_size, output_size)
+        # Linear layer on embedded GRU output (self.linear_action instead of
+        # self.out_action?)
+        self.out_action = nn.Linear(hidden_size, output_size)
 
     def forward(self, X):
-        """Forward pass of the model"""
+        """Forward pass model"""
         # Predict hidden estimates using GRU layer
-        y_hidden, state_hidden = self.gru_input(X)
+        y_hidden, state_hidden = self.hidden_0(X)
 
         # Predict binary alpha and beta estimates using linear and RELU layers
-        y_alpha_bin = self.relu_alpha(self.linear_alpha_bin(y_hidden))
-        y_beta_bin = self.relu_beta(self.linear_beta_bin(y_hidden))
+        y_alpha_bin = self.relu_alpha(self.out_alpha(y_hidden))
+        y_beta_bin = self.relu_beta(self.out_beta(y_hidden))
 
         # Predict alpha and beta estimates using linear layer
-        y_alpha = self.linear_alpha(y_alpha_bin)
-        y_beta = self.linear_beta(y_beta_bin)
+        y_alpha = self.reg_alpha(y_alpha_bin)
+        y_beta = self.reg_beta(y_beta_bin)
 
         # Create embedded input
         X_embedded = torch.cat((X, y_alpha_bin, y_beta_bin), dim=2)
 
         # Predict action using GRU layer
-        y_action, state_action = self.gru_embedded(X_embedded)
-        y_action = F.softmax(self.linear_action(y_action), dim=-1)
+        y_action, state_action = self.hidden_1(X_embedded)
+        y_action = F.softmax(self.out_action(y_action), dim=-1)
 
         return (y_action, y_alpha_bin, y_beta_bin, y_alpha, y_beta,
                 state_hidden, state_action,)
@@ -91,6 +98,7 @@ def multi_loss(y_action, y_alpha_bin, y_beta_bin, y_alpha, y_beta):
 def train_one_epoch(model, device, optimizer, train_loader):
     """Train RNN model for one epoch"""
     # Initialize running loss as array
+    # TODO: avoid hard-coding dimension of multi-loss
     running_loss = np.zeros(5)
 
     # Loop over training data
@@ -129,8 +137,9 @@ def train_one_epoch(model, device, optimizer, train_loader):
 def eval_model(model, device, val_loader):
     """Evaluate RNN model"""
     # Initialize running loss
+    # TODO: avoid hard-coding dimension of multi-loss
     running_loss = np.zeros(5)
-    
+
     # Loop over validation data
     for X, y_true in val_loader:
         # Move data to GPU
@@ -154,8 +163,9 @@ def eval_model(model, device, val_loader):
 
 # Training loop
 def training_loop(model, device, train_loader, val_loader,
-                  fname, nepochs=100):
+                  fname, nepochs=100, optimizer_lr=0.001):
     """Training loop"""
+    # Initialize minimum losses (the values are arbitrarily large)
     min_train_loss = 100
     min_val_loss = 100
 
@@ -166,7 +176,7 @@ def training_loop(model, device, train_loader, val_loader,
     model.to(device)
 
     # Use Adam optimizer
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=optimizer_lr)
 
     # Loop over epochs
     for i in range(nepochs):

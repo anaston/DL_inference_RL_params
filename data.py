@@ -1,6 +1,6 @@
+# Import libraries
 import numpy as np
 import pandas as pd
-
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
@@ -9,8 +9,9 @@ from torch.utils.data import Dataset
 class UnlabeledDataset(Dataset):
     """
     Unlabeled dataset of synthetic data
-    """
 
+    NB: dtype of tensors is essential for the model to work later on
+    """
     def __init__(self, df=None, path=None):
         """Initialize dataset"""
         # Dataset as dataframe
@@ -34,20 +35,27 @@ class UnlabeledDataset(Dataset):
         df = self.df[self.df['agent'] == self.agent[idx]]
 
         # Number of blocks
-        n_blocks = df['block'].nunique()
+        nblocks = df['block'].nunique()
 
         # Convert action to one-hot encoded tensor
         action_onehot = nn.functional.one_hot(
-            torch.from_numpy(df['action'].values), self.nactions).type(dtype=torch.float32)
+            torch.from_numpy(df['action'].values),
+            self.nactions).type(dtype=torch.float32)
 
         # Reward as tensor
-        reward = torch.tensor(df['reward'].values, dtype=torch.float32)[:, np.newaxis]
+        reward = torch.tensor(df['reward'].values,
+                              dtype=torch.float32)[:, np.newaxis]
 
         # Input data (with dummy zeros in the beginning)
+        # TODO: check if first step is necessary as there appears to be
+        # block-wise padding in the second step
         X = nn.functional.pad(torch.hstack((reward, action_onehot)),
                               [0, 0, 1, 0], 'constant', value=0)[:-1]
-        X.reshape(n_blocks, -1, X.shape[1])[:, 0, :] = torch.zeros(size=(n_blocks, X.shape[1]))  # perhaps this is block wise padding?
+        X.reshape(nblocks, -1, X.shape[1])[:, 0, :] = (
+            torch.zeros(size=(nblocks, X.shape[1]))
+        )
 
+        # Return input data
         return X
 
     def __len__(self):
@@ -59,9 +67,9 @@ class LabeledDataset(UnlabeledDataset):
     """
     Labeled dataset of synthetic data
     """
-
     def __init__(self, labels, df=None, path=None):
         """Initialize dataset"""
+        # Initialize parent class
         super().__init__(df=df, path=path)
 
         # Labels
@@ -75,7 +83,7 @@ class LabeledDataset(UnlabeledDataset):
 
     def __getitem__(self, idx):
         """Get agents as dataset items"""
-        # Input data
+        # Call parent method
         X = super().__getitem__(idx)
 
         # Get dataframe for agent
