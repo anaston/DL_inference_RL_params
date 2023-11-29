@@ -295,6 +295,52 @@ class QGenerator2Armed(QGenerator):
                 self.reward_prob[0], self.reward_prob[1],)
 
 
+class QGenerator4Armed(QGenerator):
+    """
+    Class that represents a generator for a Q-learning agent performing a
+    4-armed bandit task
+    """
+    def __init__(self, alpha_gen, beta_gen, nactions=4, **kwargs):
+        """Initialize generator"""
+        # Initialize parent class
+        super().__init__(alpha_gen, beta_gen, nactions=nactions, **kwargs)
+
+        # Initialize reward probabilities
+        self.reward_prob = np.array([0.35, 0.45, 0.55, 0.65])
+
+        # Initialize offer
+        self.offer = np.zeros(nactions, dtype=int)
+
+    def _choose_action(self, q, beta):
+        """Choose action"""
+        # Calculate action probabilities (Eq. 3 in Ger et al, 2023)
+        self.action_prob = np.exp(beta * q) / np.sum(np.exp(beta * q))
+
+        # Select 2 offers from action set
+        self.offer = np.random.choice(4, size=(2,), replace=False)
+
+        # Choose action from subset
+        self.action = np.random.choice(2, p=self.action_prob[self.offer])
+        self.action = self.offer[self.action]
+
+    def _calc_reward(self):
+        """Calculate reward"""
+        # Calculate reward
+        self.reward = np.random.choice(2, p=self.reward_prob[self.offer])
+
+    def __next__(self):
+        # Call parent method
+        super().__next__()
+
+        # Return values
+        # TODO: automate returned variables (e.g., to avoid hard-coding
+        # variables or being able to define subset of variables)
+        return (self.alpha, self.beta, self.q[0], self.q[1], self.q[2],
+                self.q[3], self.action, self.action_prob[0],
+                self.action_prob[1], self.action_prob[2], self.action_prob[3],
+                self.reward, self.offer[0], self.offer[1],)
+
+
 class QLearner:
     """
     Class that represents an abstract Q-learning agent
@@ -364,6 +410,33 @@ class QLearner2Armed(QLearner):
         ) in self.q_gen], columns=[
             'alpha', 'beta', 'q1', 'q2', 'action', 'action_prob1',
             'action_prob2', 'reward', 'reward_prob1', 'reward_prob2']))
+
+        # Return self to encourage cascading
+        return self
+
+
+class QLearner4Armed(QLearner):
+    """
+    Class that represents a Q-learning agent performing a 4-armed bandit task
+    """
+    def __init__(self, idx_agent, **q_gen_kwargs):
+        """Initialize Q-learner"""
+        # Initialize parent class
+        super().__init__(idx_agent, QGenerator4Armed, **q_gen_kwargs)
+
+    def simulate(self):
+        """Simulate agent performing a 4-armed bandit task"""
+        # Loop through trials and add all results to dataframe
+        self.df = self.df.join(pd.DataFrame([(
+            alpha, beta, q1, q2, q3, q4, action, action_p1, action_p2,
+            action_p3, action_p4, reward, offer1, offer2
+        ) for (
+            alpha, beta, q1, q2, q3, q4, action, action_p1, action_p2,
+            action_p3, action_p4, reward, offer1, offer2
+        ) in self.q_gen], columns=[
+            'alpha', 'beta', 'q1', 'q2', 'q3', 'q4', 'action', 'action_prob1',
+            'action_prob2', 'action_prob3', 'action_prob4', 'reward',
+            'offer1', 'offer2']))
 
         # Return self to encourage cascading
         return self
