@@ -97,9 +97,14 @@ class LabeledDataset(UnlabeledDataset):
         y = []
         for label in self.labels:
             if label == 'action':
-                y.append(nn.functional.one_hot(
-                    torch.from_numpy(df['action'].values),
-                    self.nactions).type(dtype=torch.float32),)
+                if df['action'].nunique() == 1:
+                    y.append(torch.from_numpy(
+                        np.repeat(df['action'].values, self.nactions).reshape(
+                            -1, self.nactions).type(dtype=torch.float32)))
+                else:
+                    y.append(nn.functional.one_hot(
+                        torch.from_numpy(df['action'].values),
+                        self.nactions).type(dtype=torch.float32),)
             elif label in ['alpha_bin', 'beta_bin']:
                 y.append(torch.tensor(df[label].values, dtype=torch.int64))
             elif label in ['alpha', 'beta']:
@@ -107,7 +112,7 @@ class LabeledDataset(UnlabeledDataset):
                                       dtype=torch.float32).reshape(-1, 1))
             else:
                 raise ValueError('Unknown label')
-
+        
         return X, y
 
     def __len__(self):

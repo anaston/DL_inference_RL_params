@@ -311,22 +311,26 @@ class QGenerator4Armed(QGenerator):
         # Initialize offer
         self.offer = np.zeros(nactions, dtype=int)
 
-    def _choose_action(self, q, beta):
+    def _choose_action(self):
         """Choose action"""
         # Calculate action probabilities (Eq. 3 in Ger et al, 2023)
-        self.action_prob = np.exp(beta * q) / np.sum(np.exp(beta * q))
+        self.action_prob = np.exp(self.beta * self.q) \
+            / np.sum(np.exp(self.beta * self.q))
 
         # Select 2 offers from action set
         self.offer = np.random.choice(4, size=(2,), replace=False)
 
         # Choose action from subset
-        self.action = np.random.choice(2, p=self.action_prob[self.offer])
+        # TODO: check this step with Nitzan
+        self.action = np.random.choice(2, p=self.action_prob[self.offer]
+                                       / sum(self.action_prob[self.offer]))
         self.action = self.offer[self.action]
 
     def _calc_reward(self):
         """Calculate reward"""
         # Calculate reward
-        self.reward = np.random.choice(2, p=self.reward_prob[self.offer])
+        self.reward = np.random.choice(2, p=self.reward_prob[self.offer]
+                                       / sum(self.reward_prob[self.offer]))
 
     def __next__(self):
         # Call parent method
