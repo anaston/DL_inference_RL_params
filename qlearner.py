@@ -292,7 +292,7 @@ class QGenerator2Armed(QGenerator):
         # variables or being able to define subset of variables)
         return (self.alpha, self.beta, self.q[0], self.q[1], self.action,
                 self.action_prob[0], self.action_prob[1], self.reward,
-                self.reward_prob[0], self.reward_prob[1],)
+                self.reward_prob[0], self.reward_prob[1])
 
 
 class QGenerator4Armed(QGenerator):
@@ -305,32 +305,33 @@ class QGenerator4Armed(QGenerator):
         # Initialize parent class
         super().__init__(alpha_gen, beta_gen, nactions=nactions, **kwargs)
 
-        # Initialize reward probabilities
-        self.reward_prob = np.array([0.35, 0.45, 0.55, 0.65])
-
         # Initialize offer
         self.offer = np.zeros(nactions, dtype=int)
 
+        # Define offer set (i.e., all combinations of 2 actions)
+        self.offer_set = np.stack(np.triu_indices(self.nactions, k=1), axis=-1)
+
     def _choose_action(self):
         """Choose action"""
+        # Choose 2 actions (i.e. row) from offer set
+        self.offer = self.offer_set[np.random.choice(self.offer_set.shape[0])]
+
         # Calculate action probabilities (Eq. 3 in Ger et al, 2023)
-        self.action_prob = np.exp(self.beta * self.q) \
-            / np.sum(np.exp(self.beta * self.q))
+        self.action_prob = np.exp(self.beta * self.q[self.offer]) \
+            / np.sum(np.exp(self.beta * self.q[self.offer]))
 
-        # Select 2 offers from action set
-        self.offer = np.random.choice(4, size=(2,), replace=False)
-
-        # Choose action from subset
-        # TODO: check this step with Nitzan
-        self.action = np.random.choice(2, p=self.action_prob[self.offer]
-                                       / sum(self.action_prob[self.offer]))
+        # Choose action from offer
+        self.action = np.random.choice(2, p=self.action_prob)
         self.action = self.offer[self.action]
 
-    def _calc_reward(self):
+    def _calc_reward(self, prob=[0.35, 0.45, 0.65, 0.75]):
         """Calculate reward"""
+        # Randomly choose reward probability on each trial
+        reward_prob = prob[self.action]
+        self.reward_prob = np.array([reward_prob, 1-reward_prob])
+
         # Calculate reward
-        self.reward = np.random.choice(2, p=self.reward_prob[self.offer]
-                                       / sum(self.reward_prob[self.offer]))
+        self.reward = np.random.choice(2, p=self.reward_prob)
 
     def __next__(self):
         # Call parent method
@@ -340,9 +341,9 @@ class QGenerator4Armed(QGenerator):
         # TODO: automate returned variables (e.g., to avoid hard-coding
         # variables or being able to define subset of variables)
         return (self.alpha, self.beta, self.q[0], self.q[1], self.q[2],
-                self.q[3], self.action, self.action_prob[0],
-                self.action_prob[1], self.action_prob[2], self.action_prob[3],
-                self.reward, self.offer[0], self.offer[1],)
+                self.q[3], self.offer[0], self.offer[1], self.action,
+                self.action_prob[0], self.action_prob[1], self.reward,
+                self.reward_prob[0], self.reward_prob[1])
 
 
 class QLearner:
@@ -432,15 +433,15 @@ class QLearner4Armed(QLearner):
         """Simulate agent performing a 4-armed bandit task"""
         # Loop through trials and add all results to dataframe
         self.df = self.df.join(pd.DataFrame([(
-            alpha, beta, q1, q2, q3, q4, action, action_p1, action_p2,
-            action_p3, action_p4, reward, offer1, offer2
+            alpha, beta, q1, q2, q3, q4, offer1, offer2, action, action_p1,
+            action_p2, reward, reward_p1, reward_p2
         ) for (
-            alpha, beta, q1, q2, q3, q4, action, action_p1, action_p2,
-            action_p3, action_p4, reward, offer1, offer2
+            alpha, beta, q1, q2, q3, q4, offer1, offer2, action, action_p1,
+            action_p2, reward, reward_p1, reward_p2
         ) in self.q_gen], columns=[
-            'alpha', 'beta', 'q1', 'q2', 'q3', 'q4', 'action', 'action_prob1',
-            'action_prob2', 'action_prob3', 'action_prob4', 'reward',
-            'offer1', 'offer2']))
+            'alpha', 'beta', 'q1', 'q2', 'q3', 'q4', 'offer1', 'offer2',
+            'action', 'action_prob1', 'action_prob2', 'reward',
+            'reward_prob1', 'reward_prob2']))
 
         # Return self to encourage cascading
         return self
