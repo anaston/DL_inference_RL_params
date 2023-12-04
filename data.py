@@ -14,7 +14,7 @@ class BaseDataset(Dataset):
     NB: dataset is assumed to bo complete, i.e., all unique values are assumed
     to appear each variable
     """
-    def __init__(self, df=None, path=None):
+    def __init__(self, df=None, path=None, backwards_compatible=False):
         """Initialize dataset"""
         # Dataset as dataframe
         if df is None:
@@ -24,6 +24,9 @@ class BaseDataset(Dataset):
                 self.df = pd.read_csv(path)
         else:
             self.df = df
+
+        # Backwards compatibility
+        self.backwards_compatible = backwards_compatible
 
         # Agents
         self.agent = self.df['agent'].unique()
@@ -36,12 +39,13 @@ class BaseDataset(Dataset):
         self.ntrials = self.df['trial'].nunique()
 
         # Number of bins for alpha and beta (remove NaNs!)
-        try:
-            self.alpha_nbins = self.df['alpha_bin'].dropna().nunique()
-            self.beta_nbins = self.df['beta_bin'].dropna().nunique()
-        except KeyError:  # for compatibility with old datasets
+        # NB: handle compatibility with old datasets
+        if backwards_compatible:
             self.alpha_nbins = 5
             self.beta_nbins = 5
+        else:
+            self.alpha_nbins = self.df['alpha_bin'].dropna().nunique()
+            self.beta_nbins = self.df['beta_bin'].dropna().nunique()
 
         # Initialize variables
         self.vars = dict()
@@ -138,7 +142,9 @@ class UnlabeledDataset(BaseDataset):
         X = torch.hstack([self._var2tensor(df, i) for i in self.inputs])
 
         # Add shift to input data
-        X = nn.functional.pad(X, [0, 0, 1, 0], 'constant', value=0)[:-1]
+        # NB: if compatibility needed with old datasets
+        if self.backwards_compatible:
+            X = nn.functional.pad(X, [0, 0, 1, 0], 'constant', value=0)[:-1]
 
         # Add dummy zeros to the beginning of each block
         X.reshape(self.nblocks, -1, X.shape[1])[:, 0, :] = (
@@ -178,5 +184,11 @@ class LabeledDataset(UnlabeledDataset):
         # Convert outputs to tensors
         # NB: we keep outputs in list to be able to use specific dtype for each
         y = [self._var2tensor(df, o) for o in self.outputs]
+
+        # Add shift to action data so that it corresponds to the next trial
+        # NB: avoid if compatibility needed with old datasets
+        if not self.backwards_compatible:
+            y = [nn.functional.pad(val, [0, 0, 0, 1], 'constant', value=0)[1:]
+                 for i, val in enumerate(y) if self.outputs[i] == 'action']
 
         return X, y

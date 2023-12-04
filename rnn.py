@@ -43,14 +43,16 @@ class GRU(nn.Module):
     """
     Class for custom RNN model with two GRU layers
 
-    NB: we keep the naming convention of layers from the original paper
-    to be able to compare the results with the original implementation (but new
-    suggestinos are made in the comments for the future)
+    NB: layer names are defined in a backwards-compatible way, so that old
+    models can be also re-used
     """
-    def __init__(self, ds, hidden_size, dropout,):
+    def __init__(self, ds, hidden_size, dropout, backwards_compatible=False):
         """Initialize model"""
         # Initialize parent class
         super().__init__()
+
+        # Fields for backwards compatibility
+        self.backwards_compatible = backwards_compatible
 
         # Initialize dictionary for model output
         self.y = dict()
@@ -64,58 +66,70 @@ class GRU(nn.Module):
         self.loss = {k: v for k, v in self.loss.items() if k in ds.outputs}
 
         # GRU layer on inputs (self.gru_input instead of self.hidden_0?)
-        self.hidden_0 = nn.GRU(input_size=ds.ninputs,
-                               hidden_size=hidden_size, num_layers=1,
-                               batch_first=True, dropout=dropout,)
+        setattr(self, self._c('gru_input'),
+                nn.GRU(input_size=ds.ninputs, hidden_size=hidden_size,
+                       num_layers=1, batch_first=True, dropout=dropout))
 
-        # Linear layers on GRU output (self.linear_*_bin instead of
-        # self.out_*?)
-        self.out_alpha = nn.Linear(hidden_size, ds.alpha_nbins)
-        self.out_beta = nn.Linear(hidden_size, ds.beta_nbins)
+        # Linear layers on GRU output
+        setattr(self, self._c('linear_alpha_bin'),
+                nn.Linear(hidden_size, ds.alpha_nbins))
+        setattr(self, self._c('linear_beta_bin'),
+                nn.Linear(hidden_size, ds.beta_nbins))
 
         # RELU layers on linear output
         self.relu_alpha = nn.ReLU()
         self.relu_beta = nn.ReLU()
 
-        # Linear layers on RELU output (self.linear_* instead of self.reg_*?)
-        self.reg_alpha = nn.Linear(ds.alpha_nbins, 1)
-        self.reg_beta = nn.Linear(ds.beta_nbins, 1)
+        # Linear layers on RELU output
+        setattr(self, self._c('linear_alpha'), nn.Linear(ds.alpha_nbins, 1))
+        setattr(self, self._c('linear_beta'), nn.Linear(ds.beta_nbins, 1))
 
-        # GRU layer on embedded inputs (self.gru_embedded instead of
-        # self.hidden_1?)
-        self.hidden_1 = nn.GRU(input_size=ds.ninputs
-                               + ds.alpha_nbins + ds.beta_nbins,
-                               hidden_size=hidden_size, num_layers=1,
-                               batch_first=True, dropout=dropout,)
+        # GRU layer on embedded inputs
+        setattr(self, self._c('gru_embedded'),
+                nn.GRU(input_size=ds.ninputs + ds.alpha_nbins + ds.beta_nbins,
+                       hidden_size=hidden_size, num_layers=1, batch_first=True,
+                       dropout=dropout))
 
-        # Linear layer on embedded GRU output (self.linear_action instead of
-        # self.out_action?)
-        self.out_action = nn.Linear(
-            hidden_size, ds.vars['action']['last_shape'])
+        # Linear layer on embedded GRU output
+        setattr(self, self._c('linear_action'),
+                nn.Linear(hidden_size, ds.vars['action']['last_shape']))
+
+    def _c(self, layer_name):
+        """Return name of layer for backwards compatibility"""
+        comp_dict = {'gru_input': 'hidden_0', 'gru_embedded': 'hidden_1',
+                     'linear_alpha_bin': 'out_alpha',
+                     'linear_beta_bin': 'out_beta',
+                     'linear_alpha': 'reg_alpha', 'linear_beta': 'reg_beta',
+                     'linear_action': 'out_action'}
+        return comp_dict[layer_name] if self.backwards_compatible else (
+            layer_name)
 
     def forward(self, X):
-        """Forward pass model"""        
+        """Forward pass model"""
         # Predict hidden estimates using GRU layer
-        y_hidden, state_hidden = self.hidden_0(X)
+        y_hidden, state_hidden = getattr(self, self._c('gru_input'))(X)
 
         # Predict binary alpha and beta estimates using linear and RELU layers
-        self.y['alpha_bin'] = self.relu_alpha(self.out_alpha(y_hidden))
-        self.y['beta_bin'] = self.relu_beta(self.out_beta(y_hidden))
+        self.y['alpha_bin'] = self.relu_alpha(getattr(
+            self, self._c('linear_alpha_bin'))(y_hidden))
+        self.y['beta_bin'] = self.relu_beta(getattr(
+            self, self._c('linear_beta_bin'))(y_hidden))
 
         # Predict alpha and beta estimates using linear layer
-        self.y['alpha'] = self.reg_alpha(self.y['alpha_bin'])
-        self.y['beta'] = self.reg_beta(self.y['beta_bin'])
+        self.y['alpha'] = getattr(
+            self, self._c('linear_alpha'))(self.y['alpha_bin'])
+        self.y['beta'] = getattr(
+            self, self._c('linear_beta'))(self.y['beta_bin'])
 
         # Create embedded input
-        X_embedded = torch.cat((X, self.y['alpha_bin'], self.y['beta_bin']),
-                               dim=2)
+        X_embedded = torch.cat(
+            (X, self.y['alpha_bin'], self.y['beta_bin']), dim=2)
 
         # Predict action using GRU layer
-        y_action, state_action = self.hidden_1(X_embedded)
-        self.y['action'] = F.softmax(self.out_action(y_action), dim=-1)
-
-        return (self.y['action'], self.y['alpha_bin'], self.y['beta_bin'],
-                self.y['alpha'], self.y['beta'], state_hidden, state_action,)
+        y_action, state_action = getattr(
+            self, self._c('gru_embedded'))(X_embedded)
+        self.y['action'] = F.softmax(getattr(
+            self, self._c('linear_action'))(y_action), dim=-1)
 
     def calc_loss(self, y_true):
         """Calculate each loss of multi-loss function"""

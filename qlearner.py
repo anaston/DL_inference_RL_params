@@ -179,8 +179,12 @@ class QGenerator(Iterator):
     """
     Class that represents an abstract generator for a Q-learning agent
     """
-    def __init__(self, alpha_gen, beta_gen, nactions, ntrials, block_size):
+    def __init__(self, alpha_gen, beta_gen, nactions, ntrials, block_size,
+                 backwards_compatible=False):
         """Initialize generator"""
+        # Backwards compatibility
+        self.backwards_compatible = backwards_compatible
+
         # Parameter generators
         self.alpha_gen = alpha_gen
         self.beta_gen = beta_gen
@@ -193,7 +197,11 @@ class QGenerator(Iterator):
         self.nactions = nactions
 
         # Initialize Q-values
-        self.q = np.full(nactions, 0.5)
+        # NB: handle compatibility with old datasets
+        if backwards_compatible:
+            self.q = np.zeros(nactions, dtype=float)
+        else:
+            self.q = np.full(nactions, 0.5)
 
         # Initialize action and action probabilities
         self.action = None
@@ -212,6 +220,7 @@ class QGenerator(Iterator):
         # Starting index
         self._index = 0
 
+
     @abstractmethod
     def _choose_action(self):
         """Choose action"""
@@ -226,7 +235,11 @@ class QGenerator(Iterator):
         """Update Q-value"""
         if (self._index + 1) % self.block_size == 0:
             # Reset Q-values at the end of a block
-            self.q = np.full(self.nactions, 0.5)
+            # NB: handle compatibility with old datasets
+            if self.backwards_compatible:
+                self.q = np.zeros(self.nactions, dtype=float)
+            else:
+                self.q = np.full(self.nactions, 0.5)
         else:
             # Update Q-value for chosen action (Eq. 2 in Ger et al, 2023)
             self.q[self.action] = self.q[self.action] \
@@ -370,11 +383,14 @@ class QLearner:
         """Simulate agent"""
         pass
 
-    def format_df(self, columns=["alpha", "beta", "action", "reward"]):
+    def format_df(self, columns=["alpha", "beta", "action", "reward"],
+                  backwards_compatible=False):
         """Format dataframe"""
         # Circular shift Q-values so that updated Q-values belong to next trial
-        # for i in range(self.q_gen.nactions):
-        #     self.df[f'q{i+1}'] = np.roll(self.df[f'q{i+1}'], 1)
+        # NB: avoid if compatibility needed with old datasets
+        if not backwards_compatible:
+            for i in range(self.q_gen.nactions):
+                self.df[f'q{i+1}'] = np.roll(self.df[f'q{i+1}'], 1)
 
         # Convert parameter values to binned values
         if "alpha_bin" in columns:
