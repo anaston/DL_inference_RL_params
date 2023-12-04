@@ -193,7 +193,7 @@ class QGenerator(Iterator):
         self.nactions = nactions
 
         # Initialize Q-values
-        self.q = np.zeros(nactions, dtype=float)
+        self.q = np.full(nactions, 0.5)
 
         # Initialize action and action probabilities
         self.action = None
@@ -226,7 +226,7 @@ class QGenerator(Iterator):
         """Update Q-value"""
         if (self._index + 1) % self.block_size == 0:
             # Reset Q-values at the end of a block
-            self.q = np.zeros(self.nactions, dtype=float)
+            self.q = np.full(self.nactions, 0.5)
         else:
             # Update Q-value for chosen action (Eq. 2 in Ger et al, 2023)
             self.q[self.action] = self.q[self.action] \
