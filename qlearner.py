@@ -373,8 +373,8 @@ class QLearner:
     def format_df(self, columns=["alpha", "beta", "action", "reward"]):
         """Format dataframe"""
         # Circular shift Q-values so that updated Q-values belong to next trial
-        for i in range(self.q_gen.nactions):
-            self.df[f'q{i+1}'] = np.roll(self.df[f'q{i+1}'], 1)
+        # for i in range(self.q_gen.nactions):
+        #     self.df[f'q{i+1}'] = np.roll(self.df[f'q{i+1}'], 1)
 
         # Convert parameter values to binned values
         if "alpha_bin" in columns:
