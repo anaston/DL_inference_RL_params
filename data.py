@@ -14,7 +14,8 @@ class BaseDataset(Dataset):
     NB: dataset is assumed to bo complete, i.e., all unique values are assumed
     to appear each variable
     """
-    def __init__(self, df=None, path=None, backwards_compatible=False):
+    def __init__(self, df=None, path=None, alpha_nbins=None, beta_nbins=None,
+                 backwards_compatible=False):
         """Initialize dataset"""
         # Dataset as dataframe
         if df is None:
@@ -39,13 +40,16 @@ class BaseDataset(Dataset):
         self.ntrials = self.df['trial'].nunique()
 
         # Number of bins for alpha and beta (remove NaNs!)
-        # NB: handle compatibility with old datasets
-        if backwards_compatible:
-            self.alpha_nbins = 5
-            self.beta_nbins = 5
-        else:
+        # NB: all bins are assumed to be present in the dataset, otherwise
+        # provide the number of bins as input
+        if alpha_nbins is None:
             self.alpha_nbins = self.df['alpha_bin'].dropna().nunique()
+        else:
+            self.alpha_nbins = alpha_nbins
+        if beta_nbins is None:
             self.beta_nbins = self.df['beta_bin'].dropna().nunique()
+        else:
+            self.beta_nbins = beta_nbins
 
         # Initialize variables
         self.vars = dict()
@@ -64,49 +68,59 @@ class BaseDataset(Dataset):
                          torch.float32: ['action', 'reward', 'offer', 'alpha', 'beta']},
                   shape={(-1, 1): ['alpha', 'beta', 'reward']}):
         """Set attributes of dataset variables"""
+        # Index in dataframe
         for i in vars:
             if i not in self.vars:
                 # Initialize dictionary
                 self.vars[i] = dict()
 
-                # Set attributes
-                attributes = {'encoding': encoding, 'dtype': dtype,
-                              'shape': shape}
-                for key in attributes:
-                    for subkey, value in attributes[key].items():
-                        if i in value:
-                            self.vars[i][key] = subkey
+            if i in encoding['dummy']:
+                # Dummy variable
+                self.vars[i]['idx'] = self.df.columns.str.startswith(i)
+            else:
+                # Other variable
+                self.vars[i]['idx'] = self.df.columns == i
+            if self.vars[i]['idx'].sum() == 0:
+                raise ValueError(f'Variable {i} not found in dataset')
 
-        # Shape of the last dimension of variables
+        # Set attributes such as encoding, dtype, and shape
+        for i in vars:
+            attributes = {'encoding': encoding, 'dtype': dtype,
+                          'shape': shape}
+            for key in attributes:
+                for subkey, value in attributes[key].items():
+                    if i in value:
+                        self.vars[i][key] = subkey
+
+        # Shape of the last dimension
         for i in vars:
             if i in encoding['dummy']:
                 # Dummy variable
                 self.vars[i]['last_shape'] = np.unique(
-                    self.df.loc[:, self.df.columns.str.startswith(i)].values).size
+                    self.df.loc[:, self.vars[i]['idx']].values).size
             else:
                 # Other variable
                 self.vars[i]['last_shape'] = 1
 
-    def _var2tensor(self, df, varname):
+    def _var2tensor(self, df, name):
         """Convert input/output variable to tensor"""
         # Get variable as numpy array
-        if 'encoding' in self.vars[varname] \
-                and self.vars[varname]['encoding'] == 'dummy':
+        if 'encoding' in self.vars[name] \
+                and self.vars[name]['encoding'] == 'dummy':
             # Dummy variable
-            var = np.zeros((len(df), self.vars[varname]['last_shape']))
-            is_var = df.columns.str.startswith(varname)
-            var[np.repeat(np.arange(len(df)), is_var.sum()), df.loc[
-                :, is_var].values.flat] = 1
+            var = np.zeros((len(df), self.vars[name]['last_shape']))
+            var[np.repeat(np.arange(len(df)), self.vars[name]['idx'].sum()),
+                df.loc[:, self.vars[name]['idx']].values.flat] = 1
         else:
             # Other variable
-            var = df[varname].values
+            var = df[name].values
 
         # Convert to tensor
-        var = torch.tensor(var, dtype=self.vars[varname]['dtype'])
+        var = torch.tensor(var, dtype=self.vars[name]['dtype'])
 
         # Reshape variable
-        if 'shape' in self.vars[varname]:
-            var = var.reshape(*self.vars[varname]['shape'])
+        if 'shape' in self.vars[name]:
+            var = var.reshape(*self.vars[name]['shape'])
 
         # Return variable as tensor
         return var
@@ -121,11 +135,8 @@ class UnlabeledDataset(BaseDataset):
         # Initialize parent class
         super().__init__(**kwargs)
 
-        # Inputs - check if they are in dataframe
+        # Inputs
         self.inputs = inputs
-        for i in inputs:
-            if i not in self.df.columns:
-                raise ValueError('Unknown input')
 
         # Set attributes of inputs
         self._set_vars(inputs)
@@ -164,11 +175,8 @@ class LabeledDataset(UnlabeledDataset):
         # Initialize parent class
         super().__init__(inputs, **kwargs)
 
-        # Outputs - check if they are in dataframe
+        # Outputs
         self.outputs = outputs
-        for i in outputs:
-            if i not in self.df.columns:
-                raise ValueError('Unknown output')
 
         # Set attributes of outputs
         self._set_vars(outputs)
@@ -189,6 +197,7 @@ class LabeledDataset(UnlabeledDataset):
         # NB: avoid if compatibility needed with old datasets
         if not self.backwards_compatible:
             y = [nn.functional.pad(val, [0, 0, 0, 1], 'constant', value=0)[1:]
-                 for i, val in enumerate(y) if self.outputs[i] == 'action']
+                 if self.outputs[i] == 'action' else val
+                 for i, val in enumerate(y)]
 
         return X, y
