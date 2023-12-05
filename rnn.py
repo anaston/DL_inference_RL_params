@@ -13,7 +13,7 @@ class Loss:
     """
     Class for custom loss function
     """
-    def __init__(self, name, weight, tol=0):
+    def __init__(self, name, weight, tol=None):
         """Initialize loss function"""
         # Name of loss function
         self.name = name
@@ -32,8 +32,10 @@ class Loss:
         if self.name == 'CrossEntropy':
             # Reshape y_pred to match y_true
             y_pred = torch.transpose(y_pred, 1, 2)
-        elif self.name == 'BCE':
-            # Add tolerance to predictions
+
+        # Add tolerance to predictions
+        # NB: use only at evaluation time otherwise throws RuntimeError
+        if self.tol is not None:
             y_pred += self.tol
 
         return self.func(y_pred, y_true) * self.weight
